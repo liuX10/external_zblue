@@ -42,6 +42,10 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(bt_id);
 
+#if defined(CONFIG_BT_PRIVACY_ERIR)
+#define SMP_CMAC_PRIVATE_KEY   "" /* SHOULD be changed for different releases/products */
+#endif /* defined(CONFIG_BT_PRIVACY_ERIR) */
+
 struct bt_adv_id_check_data {
 	uint8_t id;
 	bool adv_enabled;
@@ -1617,6 +1621,42 @@ static bool irk_is_empty(const uint8_t* irk)
 	return true;
 }
 
+#if defined(CONFIG_BT_PRIVACY_ERIR)
+static int bt_calc_erir(const bt_addr_le_t *addr, const uint8_t *key_id, uint8_t *ir)
+{
+	/*
+	 * Product-specific CMAC key, Big-endian.
+	 */
+	uint8_t key_be[16];
+
+	/* data = BD_ADDR(7 bytes) || key_id(2 bytes), Big-endian*/
+	uint8_t data[7 + 2];
+	int err;
+
+	memcpy(key_be, SMP_CMAC_PRIVATE_KEY, 16);
+	sys_mem_swap(key_be, 16);
+
+	/* BD_ADDR: address (6 bytes) + address type (1 byte) */
+	memcpy(&data[0], addr->a.val, 6);
+	data[6] = addr->type;
+
+	/* key_id: "IR" (2 bytes) */
+	memcpy(&data[7], key_id, 2);
+	sys_mem_swap(data, 7 + 2);
+
+	err = bt_crypto_aes_cmac(key_be, data, sizeof(data), ir);
+	if (err) {
+		LOG_ERR("IR generation failed");
+		return err;
+	}
+
+	/* Big-endian output */
+	sys_mem_swap(ir, 16);
+	LOG_DBG("IR create: %s", bt_hex(ir, 16));
+	return 0;
+}
+#endif /* defined(CONFIG_BT_PRIVACY_ERIR) */
+
 int bt_setup_public_id_addr(struct bt_dev *hdev)
 {
 	bt_addr_le_t addr;
@@ -1628,15 +1668,23 @@ int bt_setup_public_id_addr(struct bt_dev *hdev)
 		return 0;
 	}
 
+#if defined(CONFIG_BT_PRIVACY)
+	uint8_t ir_irk[16];
+	uint8_t ir[16] = { 0 };
+
+#if defined(CONFIG_BT_PRIVACY_ERIR)
+	if (!irk_is_empty(hdev->irk[BT_ID_DEFAULT])) {
+		irk = hdev->irk[BT_ID_DEFAULT];
+	} else {
+		bt_calc_erir(&addr, (uint8_t*)"IR", ir);
+	}
+#else
 	if (!irk_is_empty(hdev->irk[BT_ID_DEFAULT])) {
 		irk = hdev->irk[BT_ID_DEFAULT];
 	}
 
-#if defined(CONFIG_BT_PRIVACY)
-	uint8_t ir_irk[16];
-	uint8_t ir[16];
-
 	bt_read_identity_root(hdev, ir);
+#endif /* defined(CONFIG_BT_PRIVACY_ERIR) */
 
 	if (!IS_ENABLED(CONFIG_BT_PRIVACY_RANDOMIZE_IR)) {
 		if (!bt_smp_irk_get(ir, ir_irk)) {
@@ -1645,8 +1693,8 @@ int bt_setup_public_id_addr(struct bt_dev *hdev)
 	}
 #endif /* defined(CONFIG_BT_PRIVACY) */
 
-	/* If true, `id_create` will randomize the IRK. */
-	if (!irk && IS_ENABLED(CONFIG_BT_PRIVACY)) {
+	/* If irk is null, `id_create` will randomize the IRK. */
+	if (irk && IS_ENABLED(CONFIG_BT_PRIVACY)) {
 		/* `id_create` will not store the id when called before BT_DEV_READY.
 		 * But since part of the id will be randomized, it needs to be stored.
 		 */
