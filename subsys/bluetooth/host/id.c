@@ -1692,17 +1692,17 @@ int bt_setup_public_id_addr(struct bt_dev *hdev)
 	}
 #endif /* defined(CONFIG_BT_PRIVACY) */
 
-out:
-	/* If true, `id_create` will randomize the IRK. */
-	if (!irk && IS_ENABLED(CONFIG_BT_PRIVACY)) {
+	if (IS_ENABLED(CONFIG_BT_PRIVACY)) {
 		/* `id_create` will not store the id when called before BT_DEV_READY.
-		 * But since part of the id will be randomized, it needs to be stored.
+		 * But since part of the id will be randomized or computed,
+		 * it needs to be stored.
 		 */
 		if (IS_ENABLED(CONFIG_BT_SETTINGS)) {
 			atomic_set_bit(hdev->flags, BT_DEV_STORE_ID);
 		}
 	}
 
+out:
 	return id_create(hdev, BT_ID_DEFAULT, &addr, irk);
 }
 
